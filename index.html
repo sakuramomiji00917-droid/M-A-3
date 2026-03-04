@@ -1391,8 +1391,15 @@
                 c.stores.forEach(s => {
                     if (!s.regionKey || !s.location) return; let dKey = `${s.regionKey}_${s.location}`; if (!districtDemands[dKey]) districtDemands[dKey] = { totalTraffic: 0, stores: [] };
                     let appeal = 100 * unlockedBonus; let mgrTrafficBonus = 1.0; if (s.hasManager && s.managerData) mgrTrafficBonus = s.managerData.bonus.traffic + (s.managerLevel * 0.02); appeal *= mgrTrafficBonus; let price = s.price || 500; let elasticity = Math.max(0.1, 1.0 - (((price / 500) - 1.0) * (2.0 / unlockedBonus))); appeal *= elasticity;
-                    if (c.id === 'player') { if (techMarketing) appeal *= 1.3; if (techApp) appeal *= (1.0 + appBonus); appeal *= trafficMult * syn.traffic; } else { appeal *= (1.0 + (c.marketCap / 500000000)); }
-                    let densityBonus = c.stores.filter(st => st.regionKey === s.regionKey && st.location === s.location).length; appeal *= (1.0 + (densityBonus * 0.05)); s.tempAppeal = appeal; districtDemands[dKey].totalTraffic += s.traffic; districtDemands[dKey].stores.push({ store: s, compId: c.id });
+                  if (c.id === 'player') { if (techMarketing) appeal *= 1.3; if (techApp) appeal *= (1.0 + appBonus); appeal *= trafficMult * syn.traffic; } else { appeal *= (1.0 + (c.marketCap / 500000000)); }
+                    
+                    // 🌟 修正：ドミナント戦略（集中出店）のシナジー効果を劇的に強化！
+                    let densityBonus = c.stores.filter(st => st.regionKey === s.regionKey && st.location === s.location).length; 
+                    // 1店舗増えるごとにエリア内の自社ブランド力が「1.5倍」ずつ爆増する（自社競合を補って余りある強さになる）
+                    let dominantMultiplier = densityBonus > 1 ? Math.pow(1.5, densityBonus - 1) : 1.0; 
+                    appeal *= dominantMultiplier; 
+                    
+                    s.tempAppeal = appeal; districtDemands[dKey].totalTraffic += s.traffic; districtDemands[dKey].stores.push({ store: s, compId: c.id });
                 });
             });
 
@@ -2491,13 +2498,20 @@
                 let currentVal = Math.floor(prop.currentValue || (prop.rent * 500));
 
                 // 🌟 自社店舗の場合、現在の「魅力スコア」を計算して表示
+                // 🌟 自社店舗の場合、現在の「魅力スコア」を計算して表示
                 let appealHtml = "";
                 if (realOccupant && realOccupant.id === 'player') {
                     let st = realOccupant.stores.find(s => s.regionKey === regionKey && s.location === dist.name && s.propIndex == index);
                     let mgrBonus = st.hasManager ? (st.managerData.bonus.traffic + (st.managerLevel * 0.02)) : 1.0;
                     let priceElasticity = Math.max(0.1, 1.0 - (((st.price || 500) / 500) - 1.0) * (2.0 / unlockedBonus));
-                    let score = Math.floor(100 * unlockedBonus * mgrBonus * priceElasticity * trafficMult);
-                    appealHtml = `<div style="margin-top:8px; padding:6px 10px; background:var(--primary); color:#fff; border-radius:6px; font-size:11px; font-weight:bold; display:inline-block;">⚡ 魅力スコア: ${score}</div>`;
+                    
+                    // 🌟 ドミナント倍率の計算を追加
+                    let densityBonus = realOccupant.stores.filter(sx => sx.regionKey === regionKey && sx.location === dist.name).length;
+                    let dominantMultiplier = densityBonus > 1 ? Math.pow(1.5, densityBonus - 1) : 1.0;
+                    
+                    let score = Math.floor(100 * unlockedBonus * mgrBonus * priceElasticity * trafficMult * dominantMultiplier);
+                    let dominantText = densityBonus > 1 ? ` (ドミナント x${dominantMultiplier.toFixed(1)})` : '';
+                    appealHtml = `<div style="margin-top:8px; padding:6px 10px; background:var(--primary); color:#fff; border-radius:6px; font-size:11px; font-weight:bold; display:inline-block;">⚡ 魅力スコア: ${score}${dominantText}</div>`;
                 }
 
                 html += `
@@ -4573,6 +4587,7 @@ window.startNewGame = function () {
 </body>
 
 </html>
+
 
 
 

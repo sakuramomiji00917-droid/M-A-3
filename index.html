@@ -3706,7 +3706,7 @@
             initGame(); // 裏側で世界を初期化しておく
         };
 
-        window.startNewGame = function () {
+window.startNewGame = function () {
             let inputName = document.getElementById('player-company-name-input').value;
             if (inputName && inputName.trim() !== "") {
                 companies[0].name = inputName;
@@ -3714,11 +3714,16 @@
                 addLog(`${inputName} を設立しました。M&Aや店舗拡大で世界一を目指しましょう！`, "success", "自社");
                 updateDashboard();
             }
-            switchTab('stores');
             
             let screen = document.getElementById('start-screen');
             screen.style.animation = 'fadeOut 0.5s ease-out forwards';
-            setTimeout(() => { screen.style.display = 'none'; }, 500);
+            
+            // 🌟 修正：スマホの描画サボりを防ぐため、画面が「完全に消えた後(500ms後)」に中身を作る
+            setTimeout(() => { 
+                screen.style.display = 'none'; 
+                switchTab('stores'); 
+                window.scrollTo(0, 0); // 念のため画面のスクロール位置も一番上にリセット
+            }, 500);
         };
 
         window.openLoadFromStart = function () {
@@ -4568,6 +4573,7 @@
 </body>
 
 </html>
+
 
 
 

@@ -1527,14 +1527,23 @@
                     c.stores.forEach(s => {
                         let finalTraffic = s.contestedTraffic || s.traffic; let rent = s.rent; const d = globalNetworkData[s.regionKey]?.districts.find(dx => dx.name === s.location);
                         if (d && d.properties[s.propIndex]?.owner === c.id) { rent = 0; } else if (c.id === 'player') { let cooRentDisc = coo ? (coo.level * 0.05) : 0; rent = Math.floor(rent * (1.0 - cooRentDisc) * syn.rent); }
-                        let price = s.price || 500; let rev = Math.floor(finalTraffic * price * (Math.random() * 0.2 + 0.9));
+
+                        // 🌟 AI企業は客数に合わせてバイト人数を自動で最適化する
+                        if (c.id !== 'player') s.staffCount = Math.max(1, Math.ceil((finalTraffic - (s.hasManager ? 2000 : 0)) / 1500));
+
+                        // 🌟 バイト人数による「対応可能客数（キャパシティ）」の計算
+                        let maxCapacity = (s.staffCount * 1500) + (s.hasManager ? 2000 : 0);
+                        let handledTraffic = Math.min(finalTraffic, maxCapacity); // さばき切れた客だけが売上になる
+                        s.missedTraffic = finalTraffic - handledTraffic; // 逃した客数
+
+                        let price = s.price || 500; let rev = Math.floor(handledTraffic * price * (Math.random() * 0.2 + 0.9)); // finalTrafficからhandledTrafficに変更
                         let baseSalary = 50000 * s.staffCount; if (s.hasManager && s.managerData) baseSalary += s.managerData.baseSalary; if (c.id === 'player') baseSalary = Math.floor(baseSalary * syn.hrCost);
-                        let sp = rev - rent - baseSalary; s.sales = rev; s.customers = finalTraffic;
+                        let sp = rev - rent - baseSalary; s.sales = rev; s.customers = handledTraffic; // 実際の接客数に変更
+
                         if (c.id === 'player') { let mgrMarginBonus = (s.hasManager && s.managerData) ? (s.managerData.bonus.margin + (s.managerLevel * 0.02)) : 1.0; if (techRoaster && sp > 0) sp *= 1.2; sp *= (syn.margin * mgrMarginBonus); pRev += rev; pExp += (rent + baseSalary); }
                         prof += sp;
                     });
                 } else { prof = Math.floor(c.marketCap * 0.003 * (1 + (Math.random() * 0.6 - 0.3))); }
-
                 let commonExp = Math.floor(c.debt * (c.id === 'player' && cfo ? 0.008 : 0.01));
                 if (c.id === 'player') {
                     if (hqLevel > 0) { commonExp += [1000000, 3000000, 6000000, 10000000, 20000000][hqLevel - 1] || 1000000; if (playerHQ && playerHQ.isRented) { commonExp += playerHQ.rent; if (playerHQ.owner && playerHQ.owner !== 'player') { let ownerCo = companies.find(oc => oc.id === playerHQ.owner); if (ownerCo) ownerCo.cash += playerHQ.rent; } } }
@@ -1878,109 +1887,222 @@
         // ==========================================
         window.currentStoreViewId = 'player'; // 選択状態を保存する変数
 
+        // 3. 店舗UIの上書き（★評価の表示 + ソート・フィルター機能追加版）
+        // 3. 店舗UIの描画（フィルター・魅力度・人件費・AIメーター完全対応版）
         window.renderStoreList = function () {
-            let container = document.getElementById('view-stores');
-            if (!container) return;
+            let container = document.getElementById('view-stores'); if (!container) return;
 
-            window.changeStoreView = function (val) {
-                window.currentStoreViewId = val;
-                renderStoreList();
-            };
+            // 初期状態の設定
+            if (!window.currentStoreViewId) window.currentStoreViewId = 'player';
+            if (!window.currentStoreFilterCountry) window.currentStoreFilterCountry = 'ALL';
+            if (!window.currentStoreSort) window.currentStoreSort = 'newest';
 
-            let optionsHtml = `<option value="player" ${window.currentStoreViewId === 'player' ? 'selected' : ''}>👑 自社</option>` +
-                companies.filter(c => c.sector === 'coffee' && c.id !== 'player' && !c.isBankrupt)
-                    .map(c => `<option value="${c.id}" ${window.currentStoreViewId === c.id ? 'selected' : ''}>${c.name.replace(/\[.*?\]\s*/, '')}</option>`).join('');
+            window.changeStoreView = function (val) { window.currentStoreViewId = val; renderStoreList(); };
+            window.changeStoreCountryFilter = function (val) { window.currentStoreFilterCountry = val; renderStoreList(); };
+            window.changeStoreSort = function (val) { window.currentStoreSort = val; renderStoreList(); };
+
+            let optionsHtml = `<option value="player" ${window.currentStoreViewId === 'player' ? 'selected' : ''}>👑 自社</option>` + companies.filter(c => c.sector === 'coffee' && c.id !== 'player' && !c.isBankrupt).map(c => `<option value="${c.id}" ${window.currentStoreViewId === c.id ? 'selected' : ''}>${c.name.replace(/\[.*?\]\s*/, '')}</option>`).join('');
+
+            const countryNames = { 'JP': '日本', 'USA': 'アメリカ', 'CHINA': '中国', 'UK': 'イギリス', 'KOREA': '韓国', 'AUS': '豪州', 'CAN': 'カナダ', 'FRA': 'フランス', 'GER': 'ドイツ', 'IND': 'インド' };
+            let filterOptionsHtml = `<option value="ALL" ${window.currentStoreFilterCountry === 'ALL' ? 'selected' : ''}>🌍 全世界</option>` +
+                Object.keys(countryFlags).map(code => `<option value="${code}" ${window.currentStoreFilterCountry === code ? 'selected' : ''}>${countryFlags[code]} ${countryNames[code] || code}</option>`).join('');
+
+            let sortOptionsHtml = `
+                <option value="newest" ${window.currentStoreSort === 'newest' ? 'selected' : ''}>📅 新しい順</option>
+                <option value="oldest" ${window.currentStoreSort === 'oldest' ? 'selected' : ''}>⏳ 古い順</option>
+                <option value="sales_desc" ${window.currentStoreSort === 'sales_desc' ? 'selected' : ''}>💰 売上 (高い順)</option>
+                <option value="sales_asc" ${window.currentStoreSort === 'sales_asc' ? 'selected' : ''}>📉 売上 (低い順)</option>
+                <option value="profit_desc" ${window.currentStoreSort === 'profit_desc' ? 'selected' : ''}>💎 利益 (高い順)</option>
+                <option value="profit_asc" ${window.currentStoreSort === 'profit_asc' ? 'selected' : ''}>💸 利益 (低い順)</option>
+            `;
 
             container.innerHTML = `
                 <div class="flex-between" style="margin-bottom: 24px; border-bottom: 3px solid var(--primary); padding-bottom: 12px; flex-wrap:wrap; gap:10px;">
                     <h2 style="margin:0; border:none; padding:0;"><span style="font-size:24px;">🏪</span> 店舗管理 ＆ 競合視察</h2>
-                    <select id="store-view-selector" onchange="changeStoreView(this.value)" style="width: 220px; padding: 8px 12px; font-weight:bold; cursor:pointer; border-radius:8px; border:2px solid var(--primary); color:var(--primary);">
-                        ${optionsHtml}
-                    </select>
+                    <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                        <select id="store-view-selector" onchange="changeStoreView(this.value)" style="width: auto; min-width: 120px; padding: 8px; font-weight:bold; cursor:pointer; border-radius:8px; border:2px solid var(--primary); color:var(--primary); background:#fff; font-size:13px;">
+                            ${optionsHtml}
+                        </select>
+                        <select id="store-country-filter" onchange="changeStoreCountryFilter(this.value)" style="width: auto; padding: 8px; font-weight:bold; cursor:pointer; border-radius:8px; border:1px solid var(--border); background:#f8fafc; font-size:13px;">
+                            ${filterOptionsHtml}
+                        </select>
+                        <select id="store-sort" onchange="changeStoreSort(this.value)" style="width: auto; padding: 8px; font-weight:bold; cursor:pointer; border-radius:8px; border:1px solid var(--border); background:#f8fafc; font-size:13px;">
+                            ${sortOptionsHtml}
+                        </select>
+                    </div>
                 </div>
                 <div id="store-list-content"></div>
             `;
 
-            let targetId = window.currentStoreViewId;
-            let c = companies.find(x => x.id === targetId) || companies[0];
-            let listArea = document.getElementById('store-list-content');
+            let targetId = window.currentStoreViewId; let c = companies.find(x => x.id === targetId) || companies[0]; let listArea = document.getElementById('store-list-content');
+            if (c.stores.length === 0) { listArea.innerHTML = `<div class="card" style="text-align:center; padding:60px 20px; color:var(--text-mut); border:2px dashed var(--border); background:transparent;"><div style="font-size:48px; margin-bottom:15px;">🏬</div><h3>店舗がありません</h3><p>「不動産マップ」から空き物件を探して、最初の店舗を出店しましょう！</p><button class="btn-primary" style="margin-top:15px;" onclick="switchTab('world')">🌍 不動産マップへ</button></div>`; return; }
 
-            if (c.stores.length === 0) {
-                listArea.innerHTML = `<div class="card" style="text-align:center; padding:60px 20px; color:var(--text-mut); border:2px dashed var(--border); background:transparent;">
-                            <div style="font-size:48px; margin-bottom:15px;">🏬</div>
-                            <h3>店舗がありません</h3>
-                         </div>`;
-                return;
+            let synRent = 1.0, synHr = 1.0, synTraffic = 1.0;
+            if (c.id === 'player') {
+                companies.filter(comp => comp.parent === 'player').forEach(comp => {
+                    if (comp.sector === 're') synRent -= 0.05;
+                    if (comp.sector === 'it') synHr -= 0.05;
+                    if (comp.sector === 'game' || comp.sector === 'media') synTraffic += 0.05;
+                });
+                synRent = Math.max(0.5, synRent);
+                synHr = Math.max(0.5, synHr);
             }
+            let coo = targetId === 'player' ? hiredExecs.find(e => e.role === 'COO') : null; let rentMult = coo ? (1.0 - (coo.level * 0.05)) : 1.0;
+            let cmo = targetId === 'player' ? hiredExecs.find(e => e.role === 'CMO') : null; let trafficMult = cmo ? (1.0 + (cmo.level * 0.08)) : 1.0;
 
-            let synRent = 1.0;
-            companies.filter(comp => comp.parent === targetId).forEach(comp => { if (comp.sector === 'realestate') synRent -= 0.05; });
-            synRent = Math.max(0.5, synRent);
-            let coo = targetId === 'player' ? hiredExecs.find(e => e.role === 'COO') : null;
-            let rentMult = coo ? (1.0 - (coo.level * 0.05)) : 1.0;
+            let unlockedBonus = c.unlockedMenus ? c.unlockedMenus.reduce((sum, mId) => { let mData = coffeeMenus.find(m => m.id === mId); return sum + (mData ? (mData.bonus - 1.0) : 0); }, 1.0) : 1.0;
 
-            let html = `<div class="grid-2">`;
-            c.stores.forEach(st => {
+            const cMap = { 'TOKYO': 'JP', 'OSAKA': 'JP', 'USA': 'USA', 'CHINA': 'CHINA', 'UK': 'UK', 'KOREA': 'KOREA', 'AUSTRALIA': 'AUS', 'CANADA': 'CAN', 'FRANCE': 'FRA', 'GERMANY': 'GER', 'INDIA': 'IND' };
+
+            let storesToRender = [...c.stores];
+
+            // 📊 データの事前計算
+            storesToRender.forEach(st => {
                 let isPlayer = c.id === 'player';
                 let actualRent = st.rent;
                 const distData = globalNetworkData[st.regionKey]?.districts.find(dx => dx.name === st.location);
-                if (distData && distData.properties[st.propIndex]?.owner === c.id) {
-                    actualRent = 0;
-                } else if (isPlayer) {
-                    actualRent = Math.floor(st.rent * rentMult * synRent);
-                }
+                if (distData && distData.properties[st.propIndex]?.owner === c.id) { actualRent = 0; } else if (isPlayer) { actualRent = Math.floor(st.rent * rentMult * synRent); }
+
+                let baseSalary = 50000 * (st.staffCount || 1);
+                if (st.hasManager && st.managerData) baseSalary += st.managerData.baseSalary;
+                let actualHrCost = isPlayer ? Math.floor(baseSalary * synHr) : baseSalary;
+
+                let mgrBonus = st.hasManager ? (st.managerData.bonus.traffic + ((st.managerLevel || 1) * 0.02)) : 1.0;
+                let priceElasticity = Math.max(0.1, 1.0 - (((st.price || 500) / 500) - 1.0) * (2.0 / unlockedBonus));
+                let brandBonus = isPlayer ? 1.0 : (1.0 + (c.marketCap / 500000000));
+                let domBonus = 1.0 + (c.stores.filter(s => s.regionKey === st.regionKey && s.location === st.location).length * 0.05);
+                let appealScore = Math.floor(100 * unlockedBonus * mgrBonus * priceElasticity * trafficMult * synTraffic * brandBonus * domBonus);
+
+                st._actualRent = actualRent;
+                st._actualHrCost = actualHrCost;
+                st._profit = (st.sales || 0) - actualRent - actualHrCost;
+                st._country = cMap[st.regionKey];
+                st._appeal = appealScore;
+            });
+
+            // 🌍 国フィルター適用
+            if (window.currentStoreFilterCountry !== 'ALL') storesToRender = storesToRender.filter(st => st._country === window.currentStoreFilterCountry);
+
+            // 🔃 ソート処理適用
+            if (window.currentStoreSort === 'sales_desc') storesToRender.sort((a, b) => (b.sales || 0) - (a.sales || 0));
+            else if (window.currentStoreSort === 'sales_asc') storesToRender.sort((a, b) => (a.sales || 0) - (b.sales || 0));
+            else if (window.currentStoreSort === 'profit_desc') storesToRender.sort((a, b) => b._profit - a._profit);
+            else if (window.currentStoreSort === 'profit_asc') storesToRender.sort((a, b) => a._profit - b._profit);
+            else if (window.currentStoreSort === 'oldest') storesToRender.sort((a, b) => a.id - b.id);
+            else storesToRender.sort((a, b) => b.id - a.id); // newest
+
+            if (storesToRender.length === 0) { listArea.innerHTML = `<div class="card" style="text-align:center; padding:40px 20px; color:var(--text-mut); background:transparent;">指定した条件の店舗は見つかりませんでした。</div>`; return; }
+
+            let makeStars = (val) => '<span style="color:#f59e0b; letter-spacing:2px;">' + '★'.repeat(val) + '</span><span style="color:#e2e8f0; letter-spacing:2px;">' + '★'.repeat(5 - val) + '</span>';
+
+            let html = `<div class="grid-2">`;
+            storesToRender.forEach(st => {
+                let isPlayer = c.id === 'player'; let actualRent = st._actualRent; let actualHrCost = st._actualHrCost;
 
                 let managerHtml = ``;
                 if (st.hasManager && st.managerData) {
-                    let m = st.managerData;
-                    managerHtml = `<div style="background:#eff6ff; border:1px solid #bfdbfe; border-radius:8px; padding:12px; margin-bottom:15px; display:flex; align-items:center; gap:12px;">
+                    let m = st.managerData; let s = m.stats || [3, 3, 3, 3, 3];
+                    managerHtml = `
+                    <div style="background:#eff6ff; border:1px solid #bfdbfe; border-radius:8px; padding:12px; margin-bottom:15px; display:flex; flex-direction:column; gap:10px;">
+                        <div style="display:flex; align-items:center; gap:12px;">
                             <div style="font-size:32px; background:#fff; width:50px; height:50px; border-radius:50%; display:flex; align-items:center; justify-content:center; box-shadow:var(--shadow-sm);">${m.icon}</div>
                             <div style="flex:1;">
                                 <div style="font-size:11px; color:var(--primary); font-weight:800;">店長 [${m.type}]</div>
                                 <div style="font-size:15px; font-weight:900; color:var(--text-main);">${m.firstName} ${m.lastName || ''} <span style="font-size:11px; background:var(--gold); color:#fff; padding:2px 6px; border-radius:10px; margin-left:4px;">Lv.${st.managerLevel || 1}</span></div>
                             </div>
-                        </div>`;
-                } else if (isPlayer) {
-                    managerHtml = `<div style="background:#f8fafc; border:1px dashed var(--border); border-radius:8px; padding:12px; margin-bottom:15px; text-align:center;">
-                            <div style="font-size:12px; color:var(--text-mut); margin-bottom:8px; font-weight:700;">店長不在 (バイトのみで運営中)</div>
-                            <button class="btn-primary" style="font-size:12px; padding:8px 16px;" onclick="hireManager('${st.id}')">👔 店長を面接して雇う (ガチャ)</button>
-                        </div>`;
-                } else {
-                    managerHtml = `<div style="background:#f8fafc; border:1px solid var(--border); border-radius:8px; padding:12px; margin-bottom:15px; text-align:center; font-size:12px; color:var(--text-mut); font-weight:bold;">店長不在</div>`;
-                }
+                        </div>
+                        <div style="background:#fff; border-radius:6px; padding:10px; display:grid; grid-template-columns:1fr 1fr; gap:6px; font-size:11px; border:1px dashed #bfdbfe; font-weight:bold; color:var(--text-mut);">
+                            <div class="flex-between"><span>接客</span> <span>${makeStars(s[0])}</span></div><div class="flex-between"><span>運営</span> <span>${makeStars(s[1])}</span></div>
+                            <div class="flex-between"><span>育成</span> <span>${makeStars(s[2])}</span></div><div class="flex-between"><span>魅力</span> <span>${makeStars(s[3])}</span></div>
+                            <div class="flex-between" style="grid-column: span 2; border-top:1px dashed #e2e8f0; padding-top:4px; margin-top:2px;"><span>効率</span> <span>${makeStars(s[4])}</span></div>
+                        </div>
+                        <div style="font-size:11px; color:var(--text-mut); text-align:right;">集客: +${Math.floor(((m.bonus.traffic + ((st.managerLevel || 1) * 0.02)) - 1) * 100)}% | 利益率: +${Math.floor(((m.bonus.margin + ((st.managerLevel || 1) * 0.02)) - 1) * 100)}%</div>
+                    </div>`;
+                } else if (isPlayer) { managerHtml = `<div style="background:#f8fafc; border:1px dashed var(--border); border-radius:8px; padding:12px; margin-bottom:15px; text-align:center;"><div style="font-size:12px; color:var(--text-mut); margin-bottom:8px; font-weight:700;">店長不在 (バイトのみで運営中)</div><button class="btn-primary" style="font-size:12px; padding:8px 16px;" onclick="hireManager('${st.id}')">👔 店長を面接して雇う (ガチャ)</button></div>`; }
+                else { managerHtml = `<div style="background:#f8fafc; border:1px solid var(--border); border-radius:8px; padding:12px; margin-bottom:15px; text-align:center; font-size:12px; color:var(--text-mut); font-weight:bold;">店長不在</div>`; }
 
                 let currentPrice = st.price || 500;
-                let profColor = ((st.sales || 0) - actualRent) >= 0 ? 'var(--success)' : 'var(--danger)';
+                let profColor = st._profit >= 0 ? 'var(--success)' : 'var(--danger)';
+                let staffCount = st.staffCount || 1;
 
-                let priceUI = isPlayer ? `<div style="background:#f8fafc; border-radius:8px; padding:12px; margin-bottom:15px;">
-                        <div class="flex-between" style="margin-bottom:10px;"><span style="font-size:13px; font-weight:700; color:var(--text-mut);">☕ コーヒー価格設定</span><span style="font-size:16px; font-weight:900; color:var(--primary);" id="price-val-${st.id}">¥${currentPrice.toLocaleString()}</span></div>
-                        <input type="range" min="300" max="2000" step="50" value="${currentPrice}" oninput="document.getElementById('price-val-${st.id}').innerText = '¥' + parseInt(this.value).toLocaleString()" onchange="updateStorePrice('${st.id}', this.value)">
-                    </div>` : `<div style="background:#f8fafc; border-radius:8px; padding:12px; margin-bottom:15px; text-align:center; font-weight:bold; color:var(--text-mut);">設定価格: ¥${currentPrice.toLocaleString()}</div>`;
+                let capacity = (staffCount * 1500) + (st.hasManager ? 2000 : 0);
+                let traffic = st.contestedTraffic || st.traffic;
+                let capColor = traffic > capacity ? 'var(--danger)' : (capacity > traffic * 1.8 ? 'var(--warning)' : 'var(--success)');
+                let capMsg = traffic > capacity ? '⚠️ バイト不足(客逃し)' : (capacity > traffic * 1.8 ? '⚠️ 人員過剰(無駄)' : '✅ 適正');
+                let capBarPct = Math.min(100, (traffic / capacity) * 100);
+
+                let meterUI = `
+                    <div style="margin-top:8px; font-size:11px;">
+                        <div class="flex-between" style="margin-bottom:4px;"><span style="color:var(--text-mut);">対応可能客数: <b style="color:${capColor}">${traffic.toLocaleString()} / ${capacity.toLocaleString()}人</b></span><span style="color:${capColor}; font-weight:bold;">${capMsg}</span></div>
+                        <div style="width:100%; height:6px; background:#e2e8f0; border-radius:3px; overflow:hidden;"><div style="width:${capBarPct}%; height:100%; background:${capColor};"></div></div>
+                    </div>
+                `;
+
+                let staffUI = isPlayer ? `
+                    <div class="flex-between" style="margin-top:12px; padding-top:12px; border-top:1px dashed var(--border);">
+                        <span style="font-size:12px; font-weight:bold; color:var(--text-mut);">👨‍🍳 バイト人数 (週5万/人)</span>
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <button class="btn-outline" style="padding:2px 8px; font-size:14px; min-width:28px;" onclick="updateStaff('${st.id}', -1)">-</button>
+                            <b style="font-size:14px; width:20px; text-align:center;">${staffCount}</b>
+                            <button class="btn-outline" style="padding:2px 8px; font-size:14px; min-width:28px;" onclick="updateStaff('${st.id}', 1)">+</button>
+                        </div>
+                    </div>
+                    ${meterUI}
+                ` : `
+                    <div class="flex-between" style="margin-top:12px; padding-top:12px; border-top:1px dashed var(--border);">
+                        <span style="font-size:12px; font-weight:bold; color:var(--text-mut);">👨‍🍳 バイト人数 (AI自動調整)</span>
+                        <b style="font-size:14px;">${staffCount} 人</b>
+                    </div>
+                    ${meterUI}
+                `;
+
+                let priceUI = isPlayer ? `<div style="background:#f8fafc; border-radius:8px; padding:12px; margin-bottom:15px;"><div class="flex-between" style="margin-bottom:10px;"><span style="font-size:13px; font-weight:700; color:var(--text-mut);">☕ コーヒー価格設定</span><span style="font-size:16px; font-weight:900; color:var(--primary);" id="price-val-${st.id}">¥${currentPrice.toLocaleString()}</span></div><input type="range" min="300" max="2000" step="50" value="${currentPrice}" oninput="document.getElementById('price-val-${st.id}').innerText = '¥' + parseInt(this.value).toLocaleString()" onchange="updateStorePrice('${st.id}', this.value)"><div class="flex-between" style="font-size:10px; color:var(--text-mut); margin-top:4px;"><span>薄利多売(¥300)</span><span>ブランド高単価(¥2,000)</span></div>${staffUI}</div>` : `<div style="background:#f8fafc; border-radius:8px; padding:12px; margin-bottom:15px;"><div class="flex-between"><span style="font-size:12px; font-weight:bold; color:var(--text-mut);">設定価格</span><span style="font-size:16px; font-weight:900;">¥${currentPrice.toLocaleString()}</span></div>${staffUI}</div>`;
 
                 let closeBtn = isPlayer ? `<button class="btn-outline text-danger" style="width:100%; border-color:#fecaca;" onclick="closeStore(${st.id})">❌ 閉店する (違約金: 家賃2ヶ月分)</button>` : '';
 
-                html += `<div class="card" style="border-top: 5px solid ${isPlayer ? 'var(--primary)' : 'var(--text-mut)'}; display:flex; flex-direction:column;">
-                        <div class="flex-between" style="margin-bottom:12px;"><h4 style="margin:0; font-size:16px; font-weight:900;">${st.name}</h4><span style="background:#f1f5f9; padding:4px 8px; border-radius:6px; font-size:11px; font-weight:700; color:var(--text-mut);">客数: ${(st.contestedTraffic || st.traffic).toLocaleString()}</span></div>
-                        ${managerHtml}${priceUI}
-                        <div style="font-size:13px; line-height:1.8; color:var(--text-mut); margin-bottom:15px; flex:1;">
-                            <div class="flex-between"><span>📈 週間売上:</span><b style="color:var(--text-main);">¥${(st.sales || 0).toLocaleString()}</b></div>
-                            <div class="flex-between"><span>🏢 支払家賃:</span><b style="color:var(--text-main);">¥${actualRent.toLocaleString()}</b></div>
-                            <div class="flex-between" style="margin-top:8px; padding-top:8px; border-top:1px dashed var(--border); font-size:15px;"><span>💰 週間利益:</span><b style="color:${profColor};">¥${((st.sales || 0) - actualRent).toLocaleString()}</b></div>
+                html += `
+                <div class="card" style="border-top: 5px solid ${isPlayer ? 'var(--primary)' : 'var(--text-mut)'}; display:flex; flex-direction:column;">
+                    <div class="flex-between" style="margin-bottom:12px;">
+                        <h4 style="margin:0; font-size:16px; font-weight:900;">${st.name}</h4>
+                        <span style="background:var(--primary); color:#fff; padding:4px 8px; border-radius:6px; font-size:11px; font-weight:700;">⚡ 魅力: ${st._appeal}</span>
+                    </div>
+                    ${managerHtml}
+                    ${priceUI}
+                    <div style="font-size:13px; line-height:1.8; color:var(--text-mut); margin-bottom:15px; flex:1;">
+                        <div class="flex-between"><span>📈 週間売上:</span><b style="color:var(--text-main);">¥${(st.sales || 0).toLocaleString()}</b></div>
+                        <div class="flex-between"><span>🏢 支払家賃:</span><b style="color:var(--danger);">-¥${actualRent.toLocaleString()}</b></div>
+                        <div class="flex-between"><span>👨‍🍳 人件費 (店長＋バイト):</span><b style="color:var(--danger);">-¥${actualHrCost.toLocaleString()}</b></div>
+                        <div class="flex-between" style="margin-top:8px; padding-top:8px; border-top:1px dashed var(--border); font-size:15px;">
+                            <span>💰 週間利益:</span><b style="color:${profColor};">${st._profit >= 0 ? '+' : ''}¥${st._profit.toLocaleString()}</b>
                         </div>
-                        ${closeBtn}
-                    </div>`;
+                    </div>
+                    ${closeBtn}
+                </div>`;
             });
-            html += `</div>`;
-            listArea.innerHTML = html;
+            listArea.innerHTML = html + `</div>`;
         };
-
+        // 💰 価格変更処理（プロフィット・オプティマイザー）
         // 💰 価格変更処理（プロフィット・オプティマイザー）
         window.updateStorePrice = function (storeId, newPrice) {
             let p = companies[0];
             let st = p.stores.find(s => s.id == storeId);
             if (st) {
                 st.price = parseInt(newPrice);
-                addLog(`【戦略】${st.name}の価格を ¥${st.price} に変更しました。`, 'normal', '店舗');
+                // addLogはログが溢れるので、ここではあえて出さず、
+                // 画面を再描画することで「魅力スコア」を即座に更新します。
+                renderStoreList();
+            }
+        };
+        // 👥 バイト人数の増減処理
+        window.updateStaff = function (storeId, delta) {
+            let p = companies[0];
+            let st = p.stores.find(s => s.id == storeId);
+            if (st) {
+                // バイトの人数を増減させる（最低1人は確保）
+                st.staffCount = Math.max(1, (st.staffCount || 1) + delta);
+
+                // 画面を更新してメーターを再計算
+                renderStoreList();
             }
         };
 
@@ -2307,6 +2429,12 @@
                 });
             });
 
+            // 🌟 魅力度計算ロジックをシミュレート
+            let p = companies[0];
+            let unlockedBonus = p.unlockedMenus ? p.unlockedMenus.reduce((sum, mId) => { let mData = coffeeMenus.find(m => m.id === mId); return sum + (mData ? (mData.bonus - 1.0) : 0); }, 1.0) : 1.0;
+            let cmo = hiredExecs.find(e => e.role === 'CMO');
+            let trafficMult = cmo ? (1.0 + (cmo.level * 0.08)) : 1.0;
+
             let labels = [], data = [], colors = [];
             companies.forEach(c => {
                 if (c.sector !== 'coffee' || c.isBankrupt) return;
@@ -2320,7 +2448,7 @@
             let occupied = data.reduce((a, b) => a + b, 0);
             if (totalProps > occupied) { labels.push('空き枠'); data.push(totalProps - occupied); colors.push('#e2e8f0'); }
 
-            let chartId = Date.now(); // キャンバスIDの重複を防ぐ
+            let chartId = Date.now();
 
             let html = `
             <div style="background:var(--side); color:#fff; border-radius:12px; padding:15px; margin-bottom:20px; border-left:5px solid var(--primary);">
@@ -2334,6 +2462,15 @@
                     </div>
                 </div>
             </div>
+
+            <!-- 🌟 戦略アドバイスパネル -->
+            <div style="background:#fffbeb; border:1px solid #fde68a; border-radius:12px; padding:12px; margin-bottom:15px; font-size:12px; line-height:1.4;">
+                <div style="font-weight:bold; color:var(--gold); margin-bottom:5px;">💡 エリア攻略のヒント</div>
+                ${unlockedBonus < 1.5 ? '・<b>商品開発(R&D)</b>が不足しています。HQで新メニューを開発しましょう。<br>' : ''}
+                ・客数が少ない場合は店舗管理から<b>「値下げ」</b>を検討してください。<br>
+                ・<b>店長Lv</b>を上げると、同じ立地でも競合から客を奪えます。
+            </div>
+
             <div class="flex-between" style="margin-bottom:15px;">
                 <span style="background:var(--text-main); color:#fff; padding:6px 12px; border-radius:8px; font-weight:bold; font-size:14px;">📍 ${dist.name}</span>
             </div>
@@ -2353,6 +2490,16 @@
                 let dispOwner = prop.owner === 'player' ? "👑 自社" : (prop.owner ? (companies.find(c => c.id === prop.owner)?.name.replace(/\[.*?\]\s*/, '') || "独立系オーナー(NPC)") : "独立系オーナー(NPC)");
                 let currentVal = Math.floor(prop.currentValue || (prop.rent * 500));
 
+                // 🌟 自社店舗の場合、現在の「魅力スコア」を計算して表示
+                let appealHtml = "";
+                if (realOccupant && realOccupant.id === 'player') {
+                    let st = realOccupant.stores.find(s => s.regionKey === regionKey && s.location === dist.name && s.propIndex == index);
+                    let mgrBonus = st.hasManager ? (st.managerData.bonus.traffic + (st.managerLevel * 0.02)) : 1.0;
+                    let priceElasticity = Math.max(0.1, 1.0 - (((st.price || 500) / 500) - 1.0) * (2.0 / unlockedBonus));
+                    let score = Math.floor(100 * unlockedBonus * mgrBonus * priceElasticity * trafficMult);
+                    appealHtml = `<div style="margin-top:8px; padding:6px 10px; background:var(--primary); color:#fff; border-radius:6px; font-size:11px; font-weight:bold; display:inline-block;">⚡ 魅力スコア: ${score}</div>`;
+                }
+
                 html += `
                 <div style="padding:15px; border:1px solid ${prop.owner === 'player' ? 'var(--success)' : 'var(--border)'}; border-radius:12px; background:${prop.owner === 'player' ? '#ecfdf5' : '#fff'}; box-shadow:var(--shadow-sm);">
                     <div style="margin-bottom:12px; border-bottom:1px solid var(--border); padding-bottom:8px;">
@@ -2363,6 +2510,7 @@
                         ☕ <b style="color:var(--text-main);">${tName}</b> (家賃: ¥${prop.rent.toLocaleString()})<br>
                         🚶 客数: <b style="color:var(--text-main);">${prop.traffic.toLocaleString()}</b> 人/週<br>
                         📊 資産価値: ¥${Math.floor(currentVal / 10000).toLocaleString()}万
+                        ${appealHtml}
                     </div>
                     <div style="display:flex; flex-direction:column; gap:8px;">
                         ${!isCoffee ? `<button class="btn-primary" style="padding:10px; font-size:12px;" onclick="executeExpansion('${regionKey}', '${dist.name}', ${index}); if(window.innerWidth<=800) closeModal('scanner-modal');">☕ ここに出店する</button>` : ''}
@@ -2382,7 +2530,7 @@
             };
 
             if (window.innerWidth <= 800) {
-                // 📱 スマホ版：下からスッと出てくるハーフモーダルで表示
+                // 📱 スマホ版：ヘッダー固定ハーフモーダル
                 let modalsArea = document.getElementById('modals-area');
                 let modal = document.getElementById('scanner-modal');
                 if (modal) modal.remove();
@@ -2390,26 +2538,20 @@
                 modalsArea.insertAdjacentHTML('beforeend', `
                     <div id="scanner-modal" class="modal-overlay" style="align-items: flex-end; padding:0; background:rgba(15,23,42,0.6);">
                         <div class="modal-content" style="max-width:100%; width:100%; border-radius:24px 24px 0 0; padding:0; max-height:85vh; overflow-y:auto; margin:0; box-shadow:0 -10px 40px rgba(0,0,0,0.3); animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1); display:flex; flex-direction:column;">
-                            
-                            <!-- 🌟 ヘッダーを固定 (sticky) にして見切れを防ぐ -->
                             <div style="position:sticky; top:0; background:var(--card-bg); z-index:100; padding:20px 25px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; border-radius:24px 24px 0 0;">
                                 <h3 style="margin:0; font-size:18px;">🏢 ${dist.name} - 物件スキャナー</h3>
                                 <button style="width:36px; height:36px; border-radius:50%; border:none; background:#f1f5f9; color:#000; font-size:18px; display:flex; align-items:center; justify-content:center; cursor:pointer;" onclick="closeModal('scanner-modal')">✕</button>
                             </div>
-                            
-                            <!-- 🌟 コンテンツエリア (一番下にも閉じるボタン追加) -->
                             <div id="modal-scanner-content" style="padding:25px; padding-bottom:100px;">
                                 ${html}
                                 <button class="btn-outline btn-large" style="margin-top:20px; width:100%; border-radius:12px; font-weight:bold;" onclick="closeModal('scanner-modal')">閉じる</button>
                             </div>
-                            
                         </div>
                     </div>
                 `);
                 document.getElementById('scanner-modal').style.display = 'flex';
                 setTimeout(drawCharts, 50);
             } else {
-                // 💻 PC版：右側のペインに表示（今まで通り）
                 const scanner = document.getElementById('scanner-content');
                 if (scanner) {
                     scanner.innerHTML = html;
@@ -3749,92 +3891,6 @@
         };
 
         // 3. 店舗UIの上書き（★評価の表示）
-        window.renderStoreList = function () {
-            let container = document.getElementById('view-stores'); if (!container) return;
-
-            window.changeStoreView = function (val) { window.currentStoreViewId = val; renderStoreList(); };
-            let optionsHtml = `<option value="player" ${window.currentStoreViewId === 'player' ? 'selected' : ''}>👑 自社</option>` + companies.filter(c => c.sector === 'coffee' && c.id !== 'player' && !c.isBankrupt).map(c => `<option value="${c.id}" ${window.currentStoreViewId === c.id ? 'selected' : ''}>${c.name.replace(/\[.*?\]\s*/, '')}</option>`).join('');
-
-            container.innerHTML = `<div class="flex-between" style="margin-bottom: 24px; border-bottom: 3px solid var(--primary); padding-bottom: 12px; flex-wrap:wrap; gap:10px;"><h2 style="margin:0; border:none; padding:0;"><span style="font-size:24px;">🏪</span> 店舗管理 ＆ 競合視察</h2><select id="store-view-selector" onchange="changeStoreView(this.value)" style="width: 220px; padding: 8px 12px; font-weight:bold; cursor:pointer; border-radius:8px; border:2px solid var(--primary); color:var(--primary); background:#fff;">${optionsHtml}</select></div><div id="store-list-content"></div>`;
-
-            let targetId = window.currentStoreViewId; let c = companies.find(x => x.id === targetId) || companies[0]; let listArea = document.getElementById('store-list-content');
-            if (c.stores.length === 0) { listArea.innerHTML = `<div class="card" style="text-align:center; padding:60px 20px; color:var(--text-mut); border:2px dashed var(--border); background:transparent;"><div style="font-size:48px; margin-bottom:15px;">🏬</div><h3>店舗がありません</h3><p>「不動産マップ」から空き物件を探して、最初の店舗を出店しましょう！</p><button class="btn-primary" style="margin-top:15px;" onclick="switchTab('world')">🌍 不動産マップへ</button></div>`; return; }
-
-            let synRent = 1.0; companies.filter(comp => comp.parent === targetId).forEach(comp => { if (comp.sector === 'realestate') synRent -= 0.05; }); synRent = Math.max(0.5, synRent);
-            let coo = targetId === 'player' ? hiredExecs.find(e => e.role === 'COO') : null; let rentMult = coo ? (1.0 - (coo.level * 0.05)) : 1.0;
-
-            let makeStars = (val) => '<span style="color:#f59e0b; letter-spacing:2px;">' + '★'.repeat(val) + '</span><span style="color:#e2e8f0; letter-spacing:2px;">' + '★'.repeat(5 - val) + '</span>';
-
-            let html = `<div class="grid-2">`;
-            c.stores.forEach(st => {
-                let isPlayer = c.id === 'player'; let actualRent = st.rent;
-                const distData = globalNetworkData[st.regionKey]?.districts.find(dx => dx.name === st.location);
-                if (distData && distData.properties[st.propIndex]?.owner === c.id) { actualRent = 0; } else if (isPlayer) { actualRent = Math.floor(st.rent * rentMult * synRent); }
-
-                let managerHtml = ``;
-                if (st.hasManager && st.managerData) {
-                    let m = st.managerData;
-                    let s = m.stats || [3, 3, 3, 3, 3];
-
-                    managerHtml = `
-                    <div style="background:#eff6ff; border:1px solid #bfdbfe; border-radius:8px; padding:12px; margin-bottom:15px; display:flex; flex-direction:column; gap:10px;">
-                        <div style="display:flex; align-items:center; gap:12px;">
-                            <div style="font-size:32px; background:#fff; width:50px; height:50px; border-radius:50%; display:flex; align-items:center; justify-content:center; box-shadow:var(--shadow-sm);">${m.icon}</div>
-                            <div style="flex:1;">
-                                <div style="font-size:11px; color:var(--primary); font-weight:800;">店長 [${m.type}]</div>
-                                <div style="font-size:15px; font-weight:900; color:var(--text-main);">${m.firstName} ${m.lastName || ''} <span style="font-size:11px; background:var(--gold); color:#fff; padding:2px 6px; border-radius:10px; margin-left:4px;">Lv.${st.managerLevel || 1}</span></div>
-                            </div>
-                        </div>
-                        <div style="background:#fff; border-radius:6px; padding:10px; display:grid; grid-template-columns:1fr 1fr; gap:6px; font-size:11px; border:1px dashed #bfdbfe; font-weight:bold; color:var(--text-mut);">
-                            <div class="flex-between"><span>接客</span> <span>${makeStars(s[0])}</span></div>
-                            <div class="flex-between"><span>運営</span> <span>${makeStars(s[1])}</span></div>
-                            <div class="flex-between"><span>育成</span> <span>${makeStars(s[2])}</span></div>
-                            <div class="flex-between"><span>魅力</span> <span>${makeStars(s[3])}</span></div>
-                            <div class="flex-between" style="grid-column: span 2; border-top:1px dashed #e2e8f0; padding-top:4px; margin-top:2px;"><span>効率</span> <span>${makeStars(s[4])}</span></div>
-                        </div>
-                        <div style="font-size:11px; color:var(--text-mut); text-align:right;">集客: +${Math.floor(((m.bonus.traffic + ((st.managerLevel || 1) * 0.02)) - 1) * 100)}% | 利益率: +${Math.floor(((m.bonus.margin + ((st.managerLevel || 1) * 0.02)) - 1) * 100)}%</div>
-                    </div>`;
-                } else if (isPlayer) { managerHtml = `<div style="background:#f8fafc; border:1px dashed var(--border); border-radius:8px; padding:12px; margin-bottom:15px; text-align:center;"><div style="font-size:12px; color:var(--text-mut); margin-bottom:8px; font-weight:700;">店長不在 (バイトのみで運営中)</div><button class="btn-primary" style="font-size:12px; padding:8px 16px;" onclick="hireManager('${st.id}')">👔 店長を面接して雇う (ガチャ)</button></div>`; }
-                else { managerHtml = `<div style="background:#f8fafc; border:1px solid var(--border); border-radius:8px; padding:12px; margin-bottom:15px; text-align:center; font-size:12px; color:var(--text-mut); font-weight:bold;">店長不在</div>`; }
-
-                let currentPrice = st.price || 500;
-                let profColor = ((st.sales || 0) - actualRent) >= 0 ? 'var(--success)' : 'var(--danger)';
-                let staffCount = st.staffCount || 1; // バイトの人数（デフォルト1人）
-
-                // 🌟 バイト増減UIの追加
-                let staffUI = isPlayer ? `
-                    <div class="flex-between" style="margin-top:12px; padding-top:12px; border-top:1px dashed var(--border);">
-                        <span style="font-size:12px; font-weight:bold; color:var(--text-mut);">👨‍🍳 バイト人数 (週5万/人)</span>
-                        <div style="display:flex; align-items:center; gap:8px;">
-                            <button class="btn-outline" style="padding:2px 8px; font-size:14px; min-width:28px;" onclick="updateStaff('${st.id}', -1)">-</button>
-                            <b style="font-size:14px; width:20px; text-align:center;">${staffCount}</b>
-                            <button class="btn-outline" style="padding:2px 8px; font-size:14px; min-width:28px;" onclick="updateStaff('${st.id}', 1)">+</button>
-                        </div>
-                    </div>
-                ` : '';
-
-                let priceUI = isPlayer ? `<div style="background:#f8fafc; border-radius:8px; padding:12px; margin-bottom:15px;"><div class="flex-between" style="margin-bottom:10px;"><span style="font-size:13px; font-weight:700; color:var(--text-mut);">☕ コーヒー価格設定</span><span style="font-size:16px; font-weight:900; color:var(--primary);" id="price-val-${st.id}">¥${currentPrice.toLocaleString()}</span></div><input type="range" min="300" max="2000" step="50" value="${currentPrice}" oninput="document.getElementById('price-val-${st.id}').innerText = '¥' + parseInt(this.value).toLocaleString()" onchange="updateStorePrice('${st.id}', this.value)"><div class="flex-between" style="font-size:10px; color:var(--text-mut); margin-top:4px;"><span>薄利多売(¥300)</span><span>ブランド高単価(¥2,000)</span></div>${staffUI}</div>` : `<div style="background:#f8fafc; border-radius:8px; padding:12px; margin-bottom:15px; text-align:center; font-weight:bold; color:var(--text-mut);">設定価格: ¥${currentPrice.toLocaleString()}</div>`;
-
-                let closeBtn = isPlayer ? `<button class="btn-outline text-danger" style="width:100%; border-color:#fecaca;" onclick="closeStore(${st.id})">❌ 閉店する (違約金: 家賃2ヶ月分)</button>` : '';
-
-                html += `<div class="card" style="border-top: 5px solid ${isPlayer ? 'var(--primary)' : 'var(--text-mut)'}; display:flex; flex-direction:column;"><div class="flex-between" style="margin-bottom:12px;"><h4 style="margin:0; font-size:16px; font-weight:900;">${st.name}</h4><span style="background:#f1f5f9; padding:4px 8px; border-radius:6px; font-size:11px; font-weight:700; color:var(--text-mut);">客数: ${(st.contestedTraffic || st.traffic).toLocaleString()}</span></div>${managerHtml}${priceUI}<div style="font-size:13px; line-height:1.8; color:var(--text-mut); margin-bottom:15px; flex:1;"><div class="flex-between"><span>📈 週間売上:</span><b style="color:var(--text-main);">¥${(st.sales || 0).toLocaleString()}</b></div><div class="flex-between"><span>🏢 支払家賃:</span><b style="color:var(--text-main);">¥${actualRent.toLocaleString()}</b></div><div class="flex-between" style="margin-top:8px; padding-top:8px; border-top:1px dashed var(--border); font-size:15px;"><span>💰 週間利益:</span><b style="color:${profColor};">¥${((st.sales || 0) - actualRent).toLocaleString()}</b></div></div>${closeBtn}</div>`;
-            });
-            listArea.innerHTML = html + `</div>`;
-        };
-
-        // 🌟 価格更新 ＆ バイト人数の増減関数
-        window.updateStorePrice = function (storeId, newPrice) {
-            let st = companies[0].stores.find(s => s.id == storeId);
-            if (st) { st.price = parseInt(newPrice); addLog(`【戦略】${st.name}の価格を ¥${st.price} に変更しました。`, 'normal', '店舗'); }
-        };
-
-        window.updateStaff = function (storeId, delta) {
-            let st = companies[0].stores.find(s => s.id == storeId);
-            if (st) {
-                st.staffCount = Math.max(1, Math.min(10, (st.staffCount || 1) + delta)); // 1人〜10人の間で調整
-                renderStoreList();
-            }
-        };
 
 
         // ==========================================

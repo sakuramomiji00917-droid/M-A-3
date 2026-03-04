@@ -1203,7 +1203,7 @@
             if (id === 'news') renderNewspaper();
         };
 
-        wwindow.updateDashboard = function () {
+        window.updateDashboard = function () {
             let p = companies[0];
             let y = 2020 + Math.floor((week - 1) / 48), m = Math.floor(((week - 1) % 48) / 4) + 1, w = ((week - 1) % 4) + 1;
             let weekStr = `${y}年 ${m}月 ${w}週`;
@@ -4500,4 +4500,5 @@
 </body>
 
 </html>
+
 

@@ -3920,17 +3920,23 @@ window.startNewGame = function () {
 
         // 1. インフラ契約先の初期化（未設定ならランダムに設定）
         // 1. インフラ契約先の初期化（未設定ならランダムに設定）
+       // ==========================================
+        // 🌐 フェーズ 2：インフラ契約と資金還流ロジック
+        // ==========================================
+
+        // 1. インフラ契約先の初期化（未設定ならランダムに設定）
         function ensureContracts() {
             let p = companies[0];
-            // 🌟 保険データは最初から空のオブジェクト（{}）にしてnullエラーを防ぐ
             if (!p.contracts) p.contracts = { logistics: null, it: null, insurance: {} };
             if (!p.contracts.insurance || typeof p.contracts.insurance !== 'object') p.contracts.insurance = {};
 
-            ['logistics', 'it'].forEach(sec => {
-                if (!p.contracts[sec]) {
-                    let candidates = companies.filter(c => c.sector === sec);
+            // 🌟 修正：正しいセクターID('log', 'it')で検索する
+            ['logistics', 'it'].forEach(contractKey => {
+                if (!p.contracts[contractKey]) {
+                    let secKey = contractKey === 'logistics' ? 'log' : 'it';
+                    let candidates = companies.filter(c => c.sector === secKey);
                     if (candidates.length > 0) {
-                        p.contracts[sec] = candidates[Math.floor(Math.random() * candidates.length)].id;
+                        p.contracts[contractKey] = candidates[Math.floor(Math.random() * candidates.length)].id;
                     }
                 }
             });
@@ -3948,16 +3954,16 @@ window.startNewGame = function () {
             let p = companies[0];
             let numStores = p.stores.length;
 
-            // インフラ各セクターの選択肢UI生成
-            const buildSelect = (secKey, icon, label, costPerStore) => {
+            // 🌟 修正：secKey(企業を探す用) と contractKey(契約を保存する用) を分ける
+            const buildSelect = (secKey, contractKey, icon, label, costPerStore) => {
                 let candidates = companies.filter(c => c.sector === secKey);
                 let options = candidates.map(c => {
                     let isSub = c.parent === 'player';
                     let prefix = isSub ? '👑 [自社傘下] ' : '';
-                    return `<option value="${c.id}" ${p.contracts[secKey] === c.id ? 'selected' : ''}>${prefix}${c.name.replace(/\[.*?\]\s*/, '')}</option>`;
+                    return `<option value="${c.id}" ${p.contracts[contractKey] === c.id ? 'selected' : ''}>${prefix}${c.name.replace(/\[.*?\]\s*/, '')}</option>`;
                 }).join('');
 
-                let currentCo = companies.find(c => c.id === p.contracts[secKey]);
+                let currentCo = companies.find(c => c.id === p.contracts[contractKey]);
                 let isOwned = currentCo && currentCo.parent === 'player';
                 let totalCost = numStores * costPerStore;
 
@@ -3970,7 +3976,7 @@ window.startNewGame = function () {
                 <span style="font-weight:bold; font-size:14px; color:var(--text-main);">${icon} ${label}</span>
                 <span style="font-size:13px; font-weight:900; color:${costColor};">${costLabel}</span>
             </div>
-            <select style="width:100%; padding:8px; border-radius:6px; border:1px solid var(--border); font-weight:bold;" onchange="changeContract('${secKey}', this.value)">
+            <select style="width:100%; padding:8px; border-radius:6px; border:1px solid var(--border); font-weight:bold;" onchange="changeContract('${contractKey}', this.value)">
                 ${options}
             </select>
             ${isOwned ? `<div style="font-size:11px; color:var(--success); margin-top:8px; font-weight:bold;">✅ 子会社のため費用は還流（無料化）されます</div>` : `<div style="font-size:10px; color:var(--text-mut); margin-top:8px;">※対象企業を買収すると費用が浮きます</div>`}
@@ -3987,8 +3993,8 @@ window.startNewGame = function () {
                 契約先を子会社化（TOBで過半数取得）すれば、費用は自社グループ内に還流し実質ゼロになります。
             </p>
             <div class="grid-3" style="margin-bottom:30px;">
-                ${buildSelect('logistics', '🚚', '物流・配送網', 100000)}
-                ${buildSelect('it', '💻', 'ITシステム・POS', 50000)}
+                ${buildSelect('log', 'logistics', '🚚', '物流・配送網', 100000)}
+                ${buildSelect('it', 'it', '💻', 'ITシステム・POS', 50000)}
             `;
 
             // 🛡️ 保険セクションの構築（出店している国ごとにプルダウンを生成）
@@ -3997,7 +4003,8 @@ window.startNewGame = function () {
             let activeCountries = [...new Set(p.stores.map(s => cMap[s.regionKey]))];
 
             let insuranceHtml = activeCountries.map(country => {
-                let insCos = companies.filter(c => c.sector === 'insurance' && c.country === country);
+                // 🌟 修正：保険のセクターIDを 'ins' に修正
+                let insCos = companies.filter(c => c.sector === 'ins' && c.country === country);
                 let options = `<option value="">未契約 (ペナルティ:-¥5万/週)</option>` + insCos.map(c =>
                     `<option value="${c.id}" ${p.contracts.insurance[country] === c.id ? 'selected' : ''}>${c.name.replace(/\[.*?\]\s*/, '')}</option>`
                 ).join('');
@@ -4020,8 +4027,6 @@ window.startNewGame = function () {
                 </div>
             </div>`;
 
-
-            // 既存のR&Dセクションの前にインフラUIを挿入する
             let html = container.innerHTML;
             let rdIndex = html.indexOf('💡 イノベーション・ハブ・ラボ');
             if (rdIndex !== -1) {
@@ -4031,25 +4036,25 @@ window.startNewGame = function () {
                 container.innerHTML += infraHtml;
             }
         };
+
         window.changeInsurance = function (country, val) {
             companies[0].contracts.insurance[country] = val;
             updateHQView();
         };
 
         // 3. 契約変更時の政治リスク（不満度上昇）ロジック
-        window.changeContract = function (secKey, newCompanyId) {
+        window.changeContract = function (contractKey, newCompanyId) {
             let p = companies[0];
-            let oldCompanyId = p.contracts[secKey];
+            let oldCompanyId = p.contracts[contractKey];
             let newCo = companies.find(c => c.id === newCompanyId);
             let oldCo = companies.find(c => c.id === oldCompanyId);
 
             if (oldCompanyId !== newCompanyId) {
-                // 契約を打ち切られた企業はプレイヤーへの親密度(loyalty)が激減する
                 if (oldCo && oldCo.id !== 'player' && oldCo.parent !== 'player') {
                     oldCo.loyalty = Math.max(0, (oldCo.loyalty || 50) - 30);
                     addLog(`【契約破棄】${oldCo.name.replace(/\[.*?\]\s*/, '')} はインフラ契約を打ち切られ、激怒しています！（買収や敵対行動のリスク増）`, 'alert', '政治');
                 }
-                p.contracts[secKey] = newCompanyId;
+                p.contracts[contractKey] = newCompanyId;
                 addLog(`【契約締結】新たに ${newCo.name.replace(/\[.*?\]\s*/, '')} とインフラ契約を結びました。`, 'success', '経済');
                 updateHQView();
             }
@@ -4587,6 +4592,7 @@ window.startNewGame = function () {
 </body>
 
 </html>
+
 
 
 

@@ -3714,6 +3714,8 @@
                 addLog(`${inputName} を設立しました。M&Aや店舗拡大で世界一を目指しましょう！`, "success", "自社");
                 updateDashboard();
             }
+            switchTab('stores');
+            
             let screen = document.getElementById('start-screen');
             screen.style.animation = 'fadeOut 0.5s ease-out forwards';
             setTimeout(() => { screen.style.display = 'none'; }, 500);
@@ -4566,6 +4568,7 @@
 </body>
 
 </html>
+
 
 
 
